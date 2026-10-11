@@ -13,7 +13,7 @@ export default function Signup() {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (formData.name && formData.email && formData.password.length >= 6) {
-      login(formData.email, formData.name);
+      login(formData.email, formData.password, formData.name);
       navigate('/dashboard');
     } else {
       setError('All fields are required and password must be at least 6 characters.');

@@ -12,10 +12,9 @@ export default function Login() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    // Mock auth — any email/password works
     if (formData.email && formData.password.length >= 6) {
-      login(formData.email);
-      navigate('/dashboard');
+      const role = login(formData.email, formData.password);
+      navigate(role === 'admin' ? '/admin' : '/dashboard');
     } else {
       setError('Please enter a valid email and a password of at least 6 characters.');
     }

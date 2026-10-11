@@ -2,7 +2,9 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import AdminProtectedRoute from './components/AdminProtectedRoute';
 import MainLayout from './layouts/MainLayout';
+import AdminLayout from './layouts/AdminLayout';
 
 import Home from './pages/Home';
 import Login from './pages/Login';
@@ -12,13 +14,14 @@ import HowItWorks from './pages/HowItWorks';
 import Benefits from './pages/Benefits';
 import Pricing from './pages/Pricing';
 import Dashboard from './pages/Dashboard';
+import AdminDashboard from './pages/AdminDashboard';
 
 function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* All pages share the MainLayout (Navbar + ambient bg) */}
+          {/* ── User-facing pages (with Navbar) ── */}
           <Route element={<MainLayout />}>
             <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
@@ -28,7 +31,6 @@ function App() {
             <Route path="/benefits" element={<Benefits />} />
             <Route path="/pricing" element={<Pricing />} />
 
-            {/* Protected route — redirects to /login if not authenticated */}
             <Route
               path="/dashboard"
               element={
@@ -37,10 +39,22 @@ function App() {
                 </ProtectedRoute>
               }
             />
-
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
+
+          {/* ── Admin pages (own layout, no public Navbar) ── */}
+          <Route element={<AdminLayout />}>
+            <Route
+              path="/admin"
+              element={
+                <AdminProtectedRoute>
+                  <AdminDashboard />
+                </AdminProtectedRoute>
+              }
+            />
+          </Route>
+
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

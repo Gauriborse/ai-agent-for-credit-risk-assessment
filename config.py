@@ -10,20 +10,25 @@ class Settings(BaseSettings):
     # Risk Thresholds
     THRESHOLD_APPROVE: float = 0.4
     THRESHOLD_REJECT: float = 0.7
-    
+
     # Plaid Configuration
     PLAID_CLIENT_ID: str = ""
     PLAID_SECRET: str = ""
-    PLAID_ENV: str = "sandbox"  # sandbox, development, or production
-    
+    PLAID_ENV: str = "sandbox"
+
     # Credit Bureau Mock API
     CREDIT_BUREAU_API_URL: str = "http://localhost:8001"
     CREDIT_BUREAU_API_KEY: str = "mock_api_key_12345"
-    
-    # File Upload
-    UPLOAD_DIR: str = "uploads"
-    MAX_FILE_SIZE: int = 5 * 1024 * 1024  # 5MB
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # File Upload Settings
+    UPLOAD_DIR: str = "uploads"
+    MAX_FILE_SIZE: int = 10485760  # 10 MB
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 
 settings = Settings()

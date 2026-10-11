@@ -114,6 +114,17 @@ export const uploadKYCDocument = async (userId, file, expectedName = null, expec
   }
 };
 
+// KYC Status fetch — used by admin dashboard and applicant history
+export const getKYCStatus = async (userId) => {
+  try {
+    const response = await api.get(`/kyc/status/${encodeURIComponent(userId)}`);
+    return response.data;
+  } catch (error) {
+    console.error('KYC status fetch failed:', error);
+    return { kyc_status: 'pending', id_type: null, confidence: 0.0 };
+  }
+};
+
 // User Profile
 export const getUserProfile = async (userId) => {
   try {

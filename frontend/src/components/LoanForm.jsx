@@ -1,302 +1,473 @@
-import React, { useState } from 'react';
-import { Zap, RefreshCcw, Upload, AlertTriangle } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import {
+  Zap, RefreshCcw, Upload, AlertTriangle, CheckCircle2,
+  User, Phone, Briefcase, DollarSign, Calendar, FileText,
+  CreditCard, Loader2, X, AlertCircle, Info, ShieldAlert,
+  ShieldCheck, ShieldX, ShieldQuestion
+} from 'lucide-react';
 
-export default function LoanForm({ onSubmit, isLoading }) {
-  const [formData, setFormData] = useState({
-    user_id: '',
-    income: '',
-    credit_score: '',
-    dti: '',
+const EMPLOYMENT_TYPES = [
+  { value: 'salaried',     label: 'Salaried Employee' },
+  { value: 'self-employed',label: 'Self Employed' },
+  { value: 'business',     label: 'Business Owner' },
+  { value: 'student',      label: 'Student' },
+  { value: 'unemployed',   label: 'Currently Unemployed' },
+];
+
+const LOAN_PURPOSES = [
+  { value: 'home',        label: 'Home / Mortgage' },
+  { value: 'vehicle',     label: 'Vehicle Purchase' },
+  { value: 'education',   label: 'Education' },
+  { value: 'medical',     label: 'Medical Emergency' },
+  { value: 'business',    label: 'Business / Startup' },
+  { value: 'personal',    label: 'Personal Use' },
+  { value: 'debt',        label: 'Debt Consolidation' },
+  { value: 'other',       label: 'Other' },
+];
+
+function Field({ label, required, hint, icon: Icon, children }) {
+  return (
+    <div>
+      <label className="flex items-center gap-1.5 text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">
+        {Icon && <Icon className="w-3.5 h-3.5" />}
+        {label}
+        {required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+      {children}
+      {hint && <p className="text-xs text-slate-500 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function Input({ ...props }) {
+  return (
+    <input
+      className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-3.5 text-white placeholder-slate-600
+                 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none
+                 transition-all shadow-inner disabled:opacity-50"
+      {...props}
+    />
+  );
+}
+
+function Select({ children, ...props }) {
+  return (
+    <select
+      className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-3.5 text-white
+                 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none
+                 transition-all shadow-inner appearance-none"
+      {...props}
+    >
+      {children}
+    </select>
+  );
+}
+
+// ── Payslip name check result badge ───────────────────────
+function NameCheckBadge({ nameCheck }) {
+  if (!nameCheck) return null;
+  const cfg = {
+    verified:         { icon: ShieldCheck,   cls: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400', label: 'Name Matched' },
+    mismatch:         { icon: ShieldX,       cls: 'bg-red-500/10 border-red-500/30 text-red-400',             label: 'Name Mismatch' },
+    unable_to_verify: { icon: ShieldQuestion,cls: 'bg-slate-500/10 border-slate-500/30 text-slate-400',       label: 'Name Unverified' },
+    manual_review:    { icon: ShieldAlert,   cls: 'bg-amber-500/10 border-amber-500/30 text-amber-400',       label: 'Manual Review' },
+    pending:          { icon: ShieldQuestion,cls: 'bg-slate-500/10 border-slate-500/30 text-slate-400',       label: 'Pending' },
+  };
+  const s = cfg[nameCheck.status] ?? cfg.pending;
+  const Ico = s.icon;
+  return (
+    <div className={`flex items-start gap-2 border rounded-xl px-3 py-2.5 mt-2 ${s.cls}`}>
+      <Ico className="w-4 h-4 shrink-0 mt-0.5" />
+      <div>
+        <p className="text-xs font-bold">{s.label}</p>
+        {nameCheck.message && (
+          <p className="text-xs leading-relaxed opacity-80 mt-0.5">{nameCheck.message}</p>
+        )}
+        {nameCheck.confidence > 0 && (
+          <p className="text-[10px] opacity-60 mt-0.5">
+            Confidence: {Math.round(nameCheck.confidence * 100)}%
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function LoanForm({ onSubmit, isLoading, onPayslipVerified, registeredName = '' }) {
+  const [form, setForm] = useState({
+    full_name:       '',
+    age:             '',
+    contact:         '',
+    currency:        'USD',
+    income:          '',
+    employment_type: 'salaried',
     employment_length: '',
-    loan_tenure: '',
-    currency: 'USD'
+    loan_amount:     '',
+    loan_tenure:     '',
+    loan_purpose:    'personal',
+    existing_emi:    '',
   });
 
-  const [payslipFile, setPayslipFile] = useState(null);
-  const [fraudAlert, setFraudAlert] = useState(null);
-  const [verifying, setVerifying] = useState(false);
-  const [payslipVerificationData, setPayslipVerificationData] = useState(null);
+  const [payslipFile,  setPayslipFile]  = useState(null);
+  const [fraudAlert,   setFraudAlert]   = useState(null);
+  const [verifyStatus, setVerifyStatus] = useState(null); // null | 'verifying' | 'ok' | 'warn' | 'name_mismatch'
+  const [verifyData,   setVerifyData]   = useState(null);
+  const [nameMismatch, setNameMismatch] = useState(null); // { status, message }
+  const [nameCheckResult, setNameCheckResult] = useState(null); // full name_check from backend
+  const fileRef = useRef();
 
-  const handleChange = (e) => {
+  const handle = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
+    setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleFileChange = (e) => {
+  const handleFile = (e) => {
     const file = e.target.files[0];
-    if (file && file.type === 'application/pdf') {
-      setPayslipFile(file);
-      setFraudAlert(null);
-    } else if (file) {
-      alert('Please upload a PDF file');
+    if (!file) return;
+    const ok = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'].includes(file.type)
+      || /\.(pdf|jpg|jpeg|png)$/i.test(file.name);
+    if (!ok) {
+      alert('Please upload a PDF, JPG, or PNG file.');
       e.target.value = '';
+      return;
     }
+    setPayslipFile(file);
+    setFraudAlert(null);
+    setVerifyStatus(null);
+    setVerifyData(null);
+  };
+
+  const removeFile = () => {
+    setPayslipFile(null);
+    setFraudAlert(null);
+    setVerifyStatus(null);
+    setVerifyData(null);
+    setNameMismatch(null);
+    setNameCheckResult(null);
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFraudAlert(null);
 
-    // Step 1: Check if payslip is uploaded (mandatory)
     if (!payslipFile) {
-      setFraudAlert('Payslip PDF is required. Please upload your payslip document.');
+      setFraudAlert('Payment slip is required. Please upload your salary slip or income proof.');
       return;
     }
 
-    // Step 2: Verify income with payslip
-    setVerifying(true);
+    // Step 1 — verify payslip
+    setVerifyStatus('verifying');
     try {
-      const formDataPayslip = new FormData();
-      formDataPayslip.append('claimed_income', formData.income);
-      formDataPayslip.append('document', payslipFile);
+      const fd = new FormData();
+      fd.append('claimed_income', form.income);
+      fd.append('document', payslipFile);
+      // Pass registered name (from KYC form or loan form) for payslip name cross-check
+      const nameToCheck = registeredName || form.full_name;
+      if (nameToCheck) fd.append('registered_name', nameToCheck);
 
-      const verifyResponse = await fetch('http://localhost:8000/verify-income', {
+      const res = await fetch('http://localhost:8000/verify-income', {
         method: 'POST',
-        body: formDataPayslip
+        body: fd,
       });
+      const data = await res.json();
+      setVerifyData(data.verification_data);
 
-      const verifyResult = await verifyResponse.json();
-
-      if (verifyResult.fraud_flag) {
-        setFraudAlert(verifyResult.message);
-        setVerifying(false);
-        return; // Stop submission
+      // Handle payslip name mismatch
+      const nc = data.name_check;
+      setNameCheckResult(nc);
+      if (nc && nc.status === 'mismatch') {
+        setNameMismatch(nc);
+        setVerifyStatus('name_mismatch');
+        setFraudAlert(
+          nc.message ||
+          'The name on your payslip does not match your registered name. ' +
+          'Please upload the correct document or request manual review.'
+        );
+        return;
       }
 
-      // Store verification data for later use in report
-      setPayslipVerificationData(verifyResult.verification_data);
-
-    } catch (error) {
-      console.error('Income verification failed:', error);
-      setFraudAlert('Failed to verify income document. Please try again.');
-      setVerifying(false);
+      if (data.fraud_flag) {
+        setFraudAlert(data.message);
+        setVerifyStatus('warn');
+        return;
+      }
+      setVerifyStatus('ok');
+    } catch (err) {
+      console.error('Income verification error:', err);
+      setVerifyStatus('warn');
+      setFraudAlert('Could not reach the verification service. Please check your connection and try again.');
       return;
     }
-    setVerifying(false);
 
-    // Step 3: Proceed with normal loan analysis
-    const submissionData = {
-      user_id: formData.user_id,
-      income: Number(formData.income),
-      credit_score: parseInt(formData.credit_score, 10),
-      dti: Number(formData.dti),
-      employment_length: parseInt(formData.employment_length, 10),
-      loan_tenure: formData.loan_tenure ? parseInt(formData.loan_tenure, 10) : null,
-      currency: formData.currency,
-      payslip_verification: payslipVerificationData
+    // Step 2 — submit application
+    const payload = {
+      user_id:          form.contact || form.full_name || 'applicant',
+      full_name:        form.full_name,
+      age:              form.age ? parseInt(form.age, 10) : undefined,
+      contact:          form.contact,
+      currency:         form.currency,
+      income:           parseFloat(form.income),
+      employment_type:  form.employment_type,
+      employment_length: form.employment_length ? parseFloat(form.employment_length) : undefined,
+      loan_amount:      form.loan_amount ? parseFloat(form.loan_amount) : undefined,
+      loan_tenure:      form.loan_tenure ? parseInt(form.loan_tenure, 10) : undefined,
+      loan_purpose:     form.loan_purpose,
+      existing_emi:     form.existing_emi ? parseFloat(form.existing_emi) : 0,
+      payslip_verification: verifyData,
     };
 
-    onSubmit(submissionData);
+    onSubmit(payload);
   };
 
-  const handleReset = () => {
-    setFormData({
-      user_id: '',
-      income: '',
-      credit_score: '',
-      dti: '',
-      employment_length: '',
-      loan_tenure: '',
-      currency: 'USD'
+  const reset = () => {
+    setForm({
+      full_name: '', age: '', contact: '', currency: 'USD', income: '',
+      employment_type: 'salaried', employment_length: '', loan_amount: '',
+      loan_tenure: '', loan_purpose: 'personal', existing_emi: '',
     });
-    setPayslipFile(null);
-    setFraudAlert(null);
-    setPayslipVerificationData(null);
+    removeFile();
   };
+
+  const currSymbol = form.currency === 'INR' ? '₹' : '$';
 
   return (
-    <form onSubmit={handleSubmit} className="backdrop-blur-xl bg-white/5 border border-white/10 rounded-3xl shadow-2xl p-8 flex flex-col gap-6 transition-all duration-500 hover:border-white/20">
-      
+    <form
+      onSubmit={handleSubmit}
+      className="backdrop-blur-xl bg-white/5 border border-white/10 rounded-3xl shadow-2xl p-8 flex flex-col gap-6 hover:border-white/20 transition-all duration-500"
+    >
+      {/* Header */}
       <div className="flex justify-between items-center border-b border-white/10 pb-5">
-        <h2 className="text-xl font-bold text-white tracking-wide">Applicant Data</h2>
-        <button 
-          type="button" 
-          onClick={handleReset} 
-          className="text-xs font-semibold uppercase tracking-wider bg-white/5 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-lg transition-all hover:bg-white/10 flex items-center gap-2"
+        <div>
+          <h2 className="text-xl font-bold text-white tracking-wide">Loan Application</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Credit info is fetched automatically — no technical fields required</p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="text-xs font-semibold uppercase tracking-wider bg-white/5 border border-white/10 text-slate-300
+                     hover:text-white px-4 py-2 rounded-lg transition-all hover:bg-white/10 flex items-center gap-2"
         >
-          <RefreshCcw className="w-3.5 h-3.5" />
-          Purge
+          <RefreshCcw className="w-3.5 h-3.5" /> Reset
         </button>
       </div>
-      
-      <div className="space-y-5">
-        {fraudAlert && (
-          <div className="bg-red-500/10 border-2 border-red-500 rounded-xl p-4 flex items-start gap-3 animate-pulse">
-            <AlertTriangle className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" />
-            <div>
-              <h3 className="text-red-500 font-bold text-sm uppercase tracking-wider mb-1">Fraud Alert</h3>
-              <p className="text-red-300 text-sm">{fraudAlert}</p>
-            </div>
-          </div>
-        )}
 
-        <div>
-          <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Reference Handler</label>
-          <input 
-            required 
-            name="user_id"
-            type="text" 
-            value={formData.user_id}
-            onChange={handleChange}
-            className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-            placeholder="e.g. USR-0992X" 
-          />
+      {/* Fraud / verification alert */}
+      {fraudAlert && (
+        <div className="bg-red-500/10 border-2 border-red-500/50 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <h3 className="text-red-400 font-bold text-sm mb-1">Verification Issue</h3>
+            <p className="text-red-300 text-sm leading-relaxed">{fraudAlert}</p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Section 1: Personal Info ── */}
+      <div className="space-y-4">
+        <p className="text-xs font-bold uppercase tracking-widest text-amber-400/80">Personal Information</p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Full Name" required icon={User}>
+            <Input
+              required name="full_name" type="text" value={form.full_name}
+              onChange={handle} placeholder="e.g. Priya Sharma"
+            />
+          </Field>
+          <Field label="Age" required icon={User} hint="Must be 18–80">
+            <Input
+              required name="age" type="number" min="18" max="80"
+              value={form.age} onChange={handle} placeholder="28"
+            />
+          </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-5">
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Currency</label>
-            <select 
-              required 
-              name="currency"
-              value={formData.currency}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-            >
+        <Field label="Contact (Phone or Email)" icon={Phone}>
+          <Input
+            name="contact" type="text" value={form.contact}
+            onChange={handle} placeholder="email@example.com or +91-9876543210"
+          />
+        </Field>
+      </div>
+
+      {/* ── Section 2: Income ── */}
+      <div className="space-y-4">
+        <p className="text-xs font-bold uppercase tracking-widest text-amber-400/80">Income Details</p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Currency">
+            <Select name="currency" value={form.currency} onChange={handle}>
               <option value="USD">USD ($)</option>
               <option value="INR">INR (₹)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">
-              Annual Income ({formData.currency === 'USD' ? '$' : '₹'})
-            </label>
-            <input 
-              required 
-              name="income"
-              type="number" 
-              min="1000"
-              value={formData.income}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-              placeholder={formData.currency === 'USD' ? '120000' : '10000000'} 
+            </Select>
+          </Field>
+          <Field label={`Monthly Income (${currSymbol})`} required icon={DollarSign}>
+            <Input
+              required name="income" type="number" min="1000"
+              value={form.income} onChange={handle}
+              placeholder={form.currency === 'INR' ? '50000' : '5000'}
             />
-          </div>
-          
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Credit Velocity</label>
-            <input 
-              required 
-              name="credit_score"
-              type="number" 
-              min="300" max="900"
-              value={formData.credit_score}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-              placeholder="760" 
-            />
-          </div>
-          
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Debt Index (DTI)</label>
-            <input 
-              required 
-              name="dti"
-              type="number" 
-              step="0.01" min="0" max="1"
-              value={formData.dti}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-              placeholder="0.18" 
-            />
-          </div>
-          
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Employment Length (Yrs)</label>
-            <input 
-              required 
-              name="employment_length"
-              type="number" 
-              min="0"
-              max="50"
-              value={formData.employment_length}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-              placeholder="5" 
-            />
-            <p className="text-xs text-slate-500 mt-1">Time at current job</p>
-          </div>
-          
-          <div>
-            <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">Loan Tenure (Yrs)</label>
-            <input 
-              name="loan_tenure"
-              type="number" 
-              min="1"
-              max="30"
-              value={formData.loan_tenure}
-              onChange={handleChange}
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-white placeholder-slate-600 focus:bg-slate-900 focus:ring-2 focus:ring-amber-500/50 focus:border-amber-500 outline-none transition-all duration-300 shadow-inner"
-              placeholder="15" 
-            />
-            <p className="text-xs text-slate-500 mt-1">Requested loan term (optional)</p>
-          </div>
+          </Field>
         </div>
 
-        <div>
-          <label className="block text-xs font-semibold tracking-wider text-slate-400 mb-2 uppercase">
-            Payslip PDF <span className="text-red-500">*</span>
-          </label>
-          <div className="relative">
-            <input 
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-              className="hidden"
-              id="payslip-upload"
-              required
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Employment Type" required icon={Briefcase}>
+            <Select required name="employment_type" value={form.employment_type} onChange={handle}>
+              {EMPLOYMENT_TYPES.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Years at Current Job" icon={Briefcase} hint="0 if new / not applicable">
+            <Input
+              name="employment_length" type="number" min="0" max="50" step="0.5"
+              value={form.employment_length} onChange={handle} placeholder="3"
             />
-            <label 
-              htmlFor="payslip-upload"
-              className="w-full bg-slate-900/60 border border-white/10 rounded-xl p-4 text-slate-400 hover:text-white hover:border-amber-500/50 cursor-pointer flex items-center gap-3 transition-all duration-300 shadow-inner hover:bg-slate-900"
-            >
-              <Upload className="w-5 h-5" />
-              <span className="flex-1">
-                {payslipFile ? payslipFile.name : 'Upload Payslip Document'}
-              </span>
-              {payslipFile && (
-                <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded">
-                  Uploaded
-                </span>
-              )}
-            </label>
-          </div>
-          <p className="text-xs text-slate-500 mt-1">Required: Upload your payslip to verify income and prevent fraud</p>
+          </Field>
         </div>
       </div>
-      
-      <button 
-        type="submit" 
-        disabled={isLoading || verifying}
-        className="mt-6 bg-gradient-to-r from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-slate-950 font-bold text-lg py-4 rounded-xl flex justify-center items-center shadow-lg shadow-amber-500/25 transition-all duration-300 disabled:opacity-50 disabled:grayscale hover:scale-[1.02] disabled:hover:scale-100 uppercase tracking-widest disabled:cursor-not-allowed"
+
+      {/* ── Section 3: Loan Details ── */}
+      <div className="space-y-4">
+        <p className="text-xs font-bold uppercase tracking-widest text-amber-400/80">Loan Details</p>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label={`Loan Amount (${currSymbol})`} required icon={CreditCard}>
+            <Input
+              required name="loan_amount" type="number" min="1000"
+              value={form.loan_amount} onChange={handle}
+              placeholder={form.currency === 'INR' ? '500000' : '25000'}
+            />
+          </Field>
+          <Field label="Loan Tenure (Months)" required icon={Calendar} hint="e.g. 12, 24, 36, 60">
+            <Input
+              required name="loan_tenure" type="number" min="3" max="360"
+              value={form.loan_tenure} onChange={handle} placeholder="36"
+            />
+          </Field>
+        </div>
+
+        <Field label="Loan Purpose" required icon={FileText}>
+          <Select required name="loan_purpose" value={form.loan_purpose} onChange={handle}>
+            {LOAN_PURPOSES.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+        </Field>
+
+        <Field
+          label={`Existing Monthly EMI (${currSymbol})`}
+          icon={CreditCard}
+          hint="Total of all current loan/credit repayments. Enter 0 if none."
+        >
+          <Input
+            name="existing_emi" type="number" min="0"
+            value={form.existing_emi} onChange={handle} placeholder="0"
+          />
+        </Field>
+      </div>
+
+      {/* ── Section 4: Payment Slip Upload ── */}
+      <div className="space-y-2">
+        <p className="text-xs font-bold uppercase tracking-widest text-amber-400/80 mb-2">Income Proof</p>
+        <Field
+          label="Payment Slip / Salary Slip"
+          required
+          hint="Upload your most recent payslip. Accepted: PDF, JPG, PNG (max 10 MB)."
+        >
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,image/*,application/pdf"
+            onChange={handleFile}
+            className="hidden"
+            id="payslip-upload"
+          />
+
+          {!payslipFile ? (
+            <label
+              htmlFor="payslip-upload"
+              className="w-full bg-slate-900/60 border border-dashed border-white/20 rounded-xl p-6
+                         text-slate-400 hover:text-white hover:border-amber-500/50 cursor-pointer
+                         flex flex-col items-center gap-2 transition-all hover:bg-slate-900"
+            >
+              <Upload className="w-6 h-6" />
+              <span className="text-sm font-medium">Click to upload payslip</span>
+              <span className="text-xs text-slate-600">PDF, JPG, PNG — max 10 MB</span>
+            </label>
+          ) : (
+            <div className={`border rounded-xl p-4 flex items-center gap-3 transition-all ${
+              verifyStatus === 'ok'
+                ? 'bg-emerald-500/5 border-emerald-500/30'
+                : verifyStatus === 'warn'
+                ? 'bg-amber-500/5 border-amber-500/30'
+                : 'bg-slate-900/60 border-white/10'
+            }`}>
+              <FileText className={`w-5 h-5 shrink-0 ${
+                verifyStatus === 'ok' ? 'text-emerald-400' :
+                verifyStatus === 'warn' ? 'text-amber-400' : 'text-slate-400'
+              }`} />
+              <div className="flex-1 min-w-0">
+                <p className="text-white text-sm font-medium truncate">{payslipFile.name}</p>
+                <p className="text-slate-500 text-xs">{(payslipFile.size / 1024).toFixed(1)} KB</p>
+              </div>
+              {verifyStatus === 'ok' && (
+                <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold shrink-0">
+                  <CheckCircle2 className="w-4 h-4" /> Verified
+                </span>
+              )}
+              {verifyData?.extracted_employer && (
+                <span className="text-xs text-slate-500 hidden sm:block shrink-0">
+                  {verifyData.extracted_employer}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={removeFile}
+                className="text-slate-500 hover:text-red-400 transition-colors shrink-0 p-1"
+                title="Remove file"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+        </Field>
+
+        {/* Name check result (shown after payslip verification) */}
+        {nameCheckResult && (
+          <NameCheckBadge nameCheck={nameCheckResult} />
+        )}
+      </div>
+
+      {/* ── Submit ── */}
+      <button
+        type="submit"
+        disabled={isLoading || verifyStatus === 'verifying'}
+        className="mt-2 bg-gradient-to-r from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500
+                   text-slate-950 font-bold text-base py-4 rounded-xl flex justify-center items-center
+                   shadow-lg shadow-amber-500/25 transition-all duration-300 disabled:opacity-50
+                   disabled:grayscale hover:scale-[1.02] disabled:hover:scale-100
+                   uppercase tracking-widest disabled:cursor-not-allowed"
       >
-        {verifying ? (
+        {verifyStatus === 'verifying' ? (
           <span className="flex items-center gap-3">
-            <svg className="animate-spin h-5 w-5 text-slate-950" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-            </svg>
-            Verifying Income...
+            <Loader2 className="animate-spin h-5 w-5" /> Verifying Payslip…
           </span>
         ) : isLoading ? (
           <span className="flex items-center gap-3">
-            <svg className="animate-spin h-5 w-5 text-slate-950" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
-            </svg>
-            Processing Matrix...
+            <Loader2 className="animate-spin h-5 w-5" /> Analyzing Application…
           </span>
         ) : (
           <span className="flex items-center gap-2">
-            <Zap className="w-5 h-5" />
-            Analyze Loan
+            <Zap className="w-5 h-5" /> Submit Application
           </span>
         )}
       </button>
+
+      <p className="text-center text-xs text-slate-600 leading-relaxed">
+        Credit score and credit history are fetched automatically from our simulated bureau.
+        You do not need to provide them.
+      </p>
     </form>
   );
 }

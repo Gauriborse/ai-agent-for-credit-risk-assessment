@@ -17,3 +17,6 @@ python-multipart>=0.0.6
 pillow>=10.0.0
 pytesseract>=0.3.10
 httpx>=0.24.0
+PyPDF2>=3.0.0
+openai>=1.0.0
+deepface>=0.0.79

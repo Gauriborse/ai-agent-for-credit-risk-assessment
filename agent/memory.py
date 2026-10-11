@@ -1,19 +1,30 @@
 from utils.db import get_db
 from api.schemas import LoggedDecision
 from utils.logger import get_logger
+from datetime import datetime
 
 logger = get_logger(__name__)
 
 async def save_decision(decision_data: LoggedDecision):
     """
     Save the agent's final decision and application data to MongoDB.
+    Serialises datetime objects to ISO strings so MongoDB accepts them.
     """
     db = get_db()
     if db is not None:
         try:
             collection = db["decisions"]
-            # Convert to dict and insert
-            result = await collection.insert_one(decision_data.model_dump())
+            # Convert to dict, then serialise datetime → ISO string
+            doc = decision_data.model_dump()
+            for key, val in doc.items():
+                if isinstance(val, datetime):
+                    doc[key] = val.isoformat()
+            # Nested application_data
+            if isinstance(doc.get("application_data"), dict):
+                for k, v in doc["application_data"].items():
+                    if isinstance(v, datetime):
+                        doc["application_data"][k] = v.isoformat()
+            result = await collection.insert_one(doc)
             logger.info(f"Saved decision to MongoDB with id: {result.inserted_id}")
             return str(result.inserted_id)
         except Exception as e:

@@ -93,12 +93,16 @@ def generate_loan_report_pdf(application_data: dict, decision_data: dict) -> Byt
     
     applicant_data = [
         ['User ID:', application_data.get('user_id', 'N/A')],
-        ['Annual Income:', f"{currency_symbol}{application_data.get('income', 0):,.2f}"],
+        ['Full Name:', application_data.get('full_name', 'N/A')],
+        ['Age:', str(application_data.get('age', 'N/A'))],
+        ['Monthly Income:', f"{currency_symbol}{application_data.get('income', 0):,.0f}"],
+        ['Employment Type:', application_data.get('employment_type', 'N/A')],
+        ['Employment Length:', f"{application_data.get('employment_length', 'N/A')} years"],
+        ['Loan Amount:', f"{currency_symbol}{application_data.get('loan_amount', 0):,.0f}" if application_data.get('loan_amount') else 'N/A'],
+        ['Loan Tenure:', f"{application_data.get('loan_tenure', 'N/A')} months"],
+        ['Loan Purpose:', application_data.get('loan_purpose', 'N/A')],
+        ['Existing EMI:', f"{currency_symbol}{application_data.get('existing_emi', 0):,.0f}"],
         ['Currency:', application_data.get('currency', 'USD')],
-        ['Credit Score:', str(application_data.get('credit_score', 'N/A'))],
-        ['Debt-to-Income Ratio:', f"{application_data.get('dti', 0):.2%}"],
-        ['Employment Length:', f"{application_data.get('employment_length', 0)} years"],
-        ['Loan Tenure:', f"{application_data.get('loan_tenure', 'Not specified')} years" if application_data.get('loan_tenure') else 'Not specified']
     ]
     
     applicant_table = Table(applicant_data, colWidths=[2.5*inch, 4*inch])
@@ -160,8 +164,10 @@ def generate_loan_report_pdf(application_data: dict, decision_data: dict) -> Byt
     
     decision_summary_data = [
         ['Final Decision:', decision.upper()],
-        ['Risk Score:', f"{risk_score * 100:.2f}%"],
-        ['Confidence Level:', f"{confidence * 100:.2f}%"]
+        ['Risk Score:', f"{risk_score * 100:.1f}%"],
+        ['Confidence Level:', f"{confidence * 100:.1f}%"],
+        ['Risk Category:', decision_data.get('risk_category', 'N/A')],
+        ['Internal Score:', f"{decision_data.get('internal_score', 'N/A')} (illustrative 300-900, NOT official CIBIL)"],
     ]
     
     decision_table = Table(decision_summary_data, colWidths=[2.5*inch, 4*inch])

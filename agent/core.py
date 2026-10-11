@@ -1,140 +1,109 @@
+"""
+Agent Core — routes loan applications through the appropriate pipeline.
+
+New path:  UnderwritingPipeline (7 modular agents)
+Legacy path: CreditRiskAgent (4-feature XGBoost, kept for backward compat)
+"""
+
 from config import settings
 from tools.user_data import fetch_user_data
 from tools.risk_model import predict_risk
 from tools.explainability import explain_prediction
 from tools.decision import decision_engine
-from api.schemas import LoanApplicationRequest, AgentDecisionResponse
+from agent.credit_risk_agent import CreditRiskAgent, CreditRiskInput
+from agent.underwriting_agents import UnderwritingPipeline, UnderwritingContext
+from api.schemas import LoanApplicationRequest, AgentDecisionResponse, FeatureImpact
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-def mock_llm_agent(app_data: LoanApplicationRequest) -> AgentDecisionResponse:
-    """
-    A lightweight mock agent that follows the Think -> Act -> Observe -> Decide loop manually
-    without needing an actual LLM. Useful for local dev.
-    """
-    try:
-        user_data = fetch_user_data(app_data.user_id)
-        
-        probability, confidence = predict_risk(
-            income=app_data.income,
-            credit_score=app_data.credit_score,
-            dti=app_data.dti,
-            employment_length=app_data.employment_length
-        )
-        
-        explanation_data = explain_prediction(
-            income=app_data.income,
-            credit_score=app_data.credit_score,
-            dti=app_data.dti,
-            employment_length=app_data.employment_length
-        )
-        
-        decision, heuristic_reasoning = decision_engine(
-            probability,
-            app_data.credit_score,
-            app_data.dti,
-            app_data.employment_length
-        )
-        
-        reasoning = f"{heuristic_reasoning} Agent confidence in this recommendation is {confidence:.0%}."
-                     
-        return AgentDecisionResponse(
-            risk_score=probability,
-            confidence=confidence,
-            decision=decision,
-            explanation=reasoning,
-            important_features=explanation_data
-        )
-    except Exception as e:
-        logger.error(f"mock_llm_agent pipeline failed: {e}")
-        raise RuntimeError(f"Agent Pipeline Error: {e}")
 
-def openai_llm_agent(app_data: LoanApplicationRequest) -> AgentDecisionResponse:
-    """
-    Real LangChain implementation that uses OpenAI. 
-    It defines tools and dynamically calls them.
-    """
-    from langchain_openai import ChatOpenAI
-    from langchain.agents import initialize_agent, AgentType
-    from langchain.tools import tool
-    import json
-    
-    try:
-        @tool
-        def tool_fetch_user_data(user_id: str) -> str:
-            """Fetch historical user data for the given user_id."""
-            return json.dumps(fetch_user_data(user_id))
-            
-        @tool
-        def tool_predict_risk(income: float, credit_score: int, dti: float, employment_length: int) -> str:
-            """Predict probability of loan default and our confidence."""
-            prob, conf = predict_risk(income, credit_score, dti, employment_length)
-            return json.dumps({"probability": prob, "confidence": conf})
-            
-        @tool
-        def tool_explain_prediction(income: float, credit_score: int, dti: float, employment_length: int) -> str:
-            """Get SHAP explainability feature importances parsed to strings."""
-            return json.dumps(explain_prediction(income, credit_score, dti, employment_length))
-            
-        @tool
-        def tool_decision_engine(probability: float, credit_score: int, dti: float, employment_length: int) -> str:
-            """Get the final Review/Approve/Reject decision and deterministic reasoning based on rules."""
-            decision, reasoning = decision_engine(probability, credit_score, dti, employment_length)
-            return json.dumps({"decision": decision, "reasoning": reasoning})
+def _context_from_request(
+    app: LoanApplicationRequest,
+    cross_verify_data: dict = None,
+) -> UnderwritingContext:
+    """Build UnderwritingContext from a LoanApplicationRequest."""
+    return UnderwritingContext(
+        user_id         = app.user_id,
+        full_name       = getattr(app, "full_name", None) or app.user_id,
+        age             = getattr(app, "age", None) or 35,
+        income          = app.income,
+        employment_type = getattr(app, "employment_type", None) or "salaried",
+        employment_length = float(getattr(app, "employment_length", None) or 5),
+        loan_amount     = float(getattr(app, "loan_amount", None) or 300_000),
+        loan_tenure     = int(getattr(app, "loan_tenure", None) or 36),
+        loan_purpose    = getattr(app, "loan_purpose", None) or "personal",
+        existing_emi    = float(getattr(app, "existing_emi", None) or 0.0),
+        currency        = getattr(app, "currency", None) or "USD",
+        payslip_data    = getattr(app, "payslip_verification", None),
+        cross_verify_data = cross_verify_data,
+    )
 
-        tools = [tool_fetch_user_data, tool_predict_risk, tool_explain_prediction, tool_decision_engine]
-        
-        llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=settings.OPENAI_API_KEY)
-        
-        agent = initialize_agent(
-            tools, 
-            llm, 
-            agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION, 
-            verbose=True
-        )
-        
-        prompt = f"""
-        You are a Loan Underwriting AI Agent.
-        Evaluate the following loan application:
-        User ID: {app_data.user_id}
-        Income: {app_data.income}
-        Credit Score: {app_data.credit_score}
-        DTI: {app_data.dti}
-        Employment Length: {app_data.employment_length}
-        
-        You must:
-        1. Predict the risk using tool_predict_risk.
-        2. Get the explanations using tool_explain_prediction.
-        3. Determine the decision using tool_decision_engine based on the risk.
-        4. Formulate a final structured JSON output.
-        
-        Your explanation field must weave together the explicit `reasoning` generated from tool_decision_engine, the LLM's own insights, and the feature impacts.
-        
-        Your final answer must ONLY be valid JSON with the exact following schema:
-        {{
-            "risk_score": 0.00,
-            "confidence": 0.00,
-            "decision": "Approve/Reject/Review",
-            "explanation": "Combined heuristic reasoning + LLM insights",
-            "important_features": [ {{"feature": "name", "impact": "High positive impact"}} ]
-        }}
-        """
-        
-        res = agent.run(prompt)
-        
-        clean_res = res.strip().removeprefix("```json").removesuffix("```").strip()
-        data = json.loads(clean_res)
-        return AgentDecisionResponse(**data)
-        
-    except Exception as e:
-        logger.error(f"openai_llm_agent pipeline failed: {e}")
-        raise RuntimeError(f"Agent Pipeline Error: {e}")
+
+def _response_from_context(ctx: UnderwritingContext) -> AgentDecisionResponse:
+    """Convert UnderwritingContext back to AgentDecisionResponse."""
+    features = [
+        FeatureImpact(feature=f["feature"], impact=f["impact"])
+        for f in (ctx.shap_features or [])
+    ]
+    return AgentDecisionResponse(
+        risk_score         = ctx.risk_probability,
+        confidence         = ctx.confidence,
+        decision           = ctx.decision,
+        explanation        = ctx.explanation,
+        important_features = features,
+        credit_bureau_data = ctx.bureau_data,
+        internal_score     = ctx.internal_score,
+        fraud_flags        = ctx.fraud_flags or [],
+        risk_category      = ctx.risk_category,
+        payslip_data       = ctx.payslip_data,
+    )
+
+
+def new_pipeline_agent(
+    app: LoanApplicationRequest,
+    cross_verify_data: dict = None,
+) -> AgentDecisionResponse:
+    """
+    Full 7-agent underwriting pipeline.
+    Fetches credit bureau data, runs all ML models, generates explanation.
+    cross_verify_data: dict from kyc_records (cross-document verification result).
+    """
+    ctx = _context_from_request(app, cross_verify_data=cross_verify_data)
+    ctx = UnderwritingPipeline.run(ctx)
+    return _response_from_context(ctx)
+
+
+def mock_llm_agent(
+    app: LoanApplicationRequest,
+    cross_verify_data: dict = None,
+) -> AgentDecisionResponse:
+    """
+    Legacy mock agent — now delegates to new pipeline.
+    Kept for backward compat.
+    """
+    return new_pipeline_agent(app, cross_verify_data=cross_verify_data)
+
+
+def openai_llm_agent(
+    app: LoanApplicationRequest,
+    cross_verify_data: dict = None,
+) -> AgentDecisionResponse:
+    """
+    OpenAI-backed agent — uses new pipeline (ExplanationAgent uses GPT).
+    """
+    return new_pipeline_agent(app, cross_verify_data=cross_verify_data)
+
 
 class LoanAgent:
     @staticmethod
-    def process_application(app_data: LoanApplicationRequest) -> AgentDecisionResponse:
-        if settings.USE_LOCAL_LLM:
-            return mock_llm_agent(app_data)
-        else:
-            return openai_llm_agent(app_data)
+    def process_application(
+        app: LoanApplicationRequest,
+        cross_verify_data: dict = None,
+    ) -> AgentDecisionResponse:
+        """Route to the new 7-agent pipeline."""
+        try:
+            return new_pipeline_agent(app, cross_verify_data=cross_verify_data)
+        except Exception as e:
+            logger.error(f"LoanAgent pipeline failed: {e}", exc_info=True)
+            raise RuntimeError(f"Agent Pipeline Error: {e}")
